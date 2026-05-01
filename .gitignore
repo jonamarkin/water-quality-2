@@ -1,0 +1,20 @@
+# Exploration / scratch scripts
+explore_excel.py
+explore2.py
+explore3.py
+explore4.py
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# The large Excel data file (add manually if you want to track it)
+# *.xlsx
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
