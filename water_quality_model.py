@@ -82,6 +82,24 @@ N_CV_SPLITS = 4   # TimeSeriesSplit folds
 FIGURE_OUT = "forecast_figure.png"
 EXCEL_OUT  = "forecast_results.xlsx"
 
+# ---------------------------------------------------------------------------
+# LK (Leveaniemi-Kiruna) ore combination
+# ---------------------------------------------------------------------------
+# The consultant never modelled LK. Leaching rates are derived from the
+# ore-tail leach calc sheet as a 50/50 average of Leveaniemi + Kiruna rates.
+# For NH4: Leveaniemi rate is 'na' (not measured), so only Kiruna contributes
+#          -> LK_NH4 = 0.5 * 0 + 0.5 * 3047.3 = 1523.65 kg/Mton
+# Production volumes use GK values as placeholder (update when known).
+LK_LEACH_RATES = {
+    "Cu":  (1.358 + 11.668) / 2,          # 6.513  kg/Mton
+    "NH4": (0.0   + 3047.3) / 2,          # 1523.65 kg/Mton (Lev = n/a -> 0)
+    "Cl":  (154444 + 285406) / 2,         # 219925  kg/Mton
+    "Ni":  (0.631 + 1.174)  / 2,          # 0.9025 kg/Mton
+}
+# Placeholder production volumes (Mton) -- same as GK split until confirmed
+LK_PROD_WINTER = 1.6667   # x.0 rows (5-month winter, no processing)
+LK_PROD_SUMMER = 2.5667   # x.5 rows (7-month summer, processing season)
+
 # Colour palette (vibrant, distinct hues)
 COLOURS = {
     "Cu":  "#00c8e8",
@@ -90,9 +108,11 @@ COLOURS = {
     "Ni":  "#c77dff",
 }
 
+# Feature columns -- includes LK features (zero during training)
 FEATURE_COLS = [
     "half_year", "prod_gm", "leach_gm",
     "prod_gk",  "leach_gk", "leach_gl",
+    "prod_lk",  "leach_lk",
     "pit_pump", "prev_storage",
 ]
 
@@ -113,7 +133,11 @@ def parse_block(df_raw: pd.DataFrame, param: str) -> pd.DataFrame:
     Extract one contaminant block from the raw sheet.
     Returns a tidy DataFrame with columns:
       year, half_year, prod_gm, leach_gm, prod_gk, leach_gk, leach_gl,
-      pit_pump, modelled_conc, storage_conc
+      prod_lk, leach_lk, pit_pump, modelled_conc, storage_conc
+
+    NOTE: prod_lk and leach_lk are set to 0 for ALL consultant rows because
+    the consultant never modelled the LK (Leveaniemi-Kiruna) ore combination.
+    They become non-zero only in the forecast period via inject_lk_forecast().
     """
     cfg  = BLOCKS[param]
     rows = df_raw.iloc[cfg["first_row"] : cfg["last_row"] + 1].copy()
@@ -135,12 +159,33 @@ def parse_block(df_raw: pd.DataFrame, param: str) -> pd.DataFrame:
             prod_gk      = _safe_float(row.iloc[COL_PROD_GK]),
             leach_gk     = _safe_float(row.iloc[COL_LEACH_GK]),
             leach_gl     = _safe_float(row.iloc[COL_LEACH_GL]),
+            prod_lk      = 0.0,    # LK not in consultant model -> zero
+            leach_lk     = 0.0,    # LK not in consultant model -> zero
             pit_pump     = _safe_float(row.iloc[COL_PIT_PUMP]),
             modelled_conc= _safe_float(row.iloc[COL_MODELLED]),
             storage_conc = _safe_float(row.iloc[COL_STORAGE]),
         ))
 
     df = pd.DataFrame(data).sort_values("year").reset_index(drop=True)
+    return df
+
+
+def inject_lk_forecast(df_forecast: pd.DataFrame, param: str) -> pd.DataFrame:
+    """
+    Populate prod_lk and leach_lk for the 2026-2030 forecast rows.
+
+    Uses:
+      - LK_PROD_SUMMER / LK_PROD_WINTER as production volumes (placeholder)
+      - LK_LEACH_RATES[param] as the per-tonne leaching rate (50/50 Lev+Kir)
+
+    When Agnes confirms actual LK production volumes, update LK_PROD_* above.
+    """
+    df = df_forecast.copy()
+    lk_rate = LK_LEACH_RATES[param]
+    df["prod_lk"]  = df["half_year"].apply(
+        lambda h: LK_PROD_SUMMER if h == 1 else LK_PROD_WINTER
+    )
+    df["leach_lk"] = df["prod_lk"] * lk_rate
     return df
 
 
@@ -208,9 +253,10 @@ def run_forecast(pipe, df_forecast: pd.DataFrame,
     Parameters
     ----------
     pipe          : fitted sklearn Pipeline
-    df_forecast   : rows with year >= FORECAST_FROM (consultant's projected inputs)
+    df_forecast   : rows with year >= FORECAST_FROM (LK columns already injected)
     seed_storage  : storage_conc from the last training row (seeds the recursion)
-    leach_scale   : multiplicative factor on all leaching columns (used by MC)
+    leach_scale   : multiplicative factor on ALL leaching columns (used by MC)
+                    This perturbs GM, GK, GL AND LK leaching simultaneously.
 
     Returns
     -------
@@ -227,6 +273,8 @@ def run_forecast(pipe, df_forecast: pd.DataFrame,
             row["prod_gk"],
             row["leach_gk"] * leach_scale,
             row["leach_gl"] * leach_scale,
+            row["prod_lk"],
+            row["leach_lk"] * leach_scale,   # LK leaching also perturbed in MC
             row["pit_pump"],
             prev_storage,
         ]])
@@ -503,19 +551,26 @@ def main():
         # Split
         df_train    = df[df["year"] <= TRAIN_UNTIL].copy()
         df_forecast = df[df["year"] >= FORECAST_FROM].copy()
+
+        # Inject LK leaching into forecast rows (LK = 0 in training data)
+        # 50/50 Leveaniemi+Kiruna rates; production = GK placeholder volumes
+        lk_rate = LK_LEACH_RATES[param]
+        df_forecast = inject_lk_forecast(df_forecast, param)
         print(f"  Training rows : {len(df_train)}"
               f"  ({df_train['year'].min()} to {df_train['year'].max()})")
         print(f"  Forecast rows : {len(df_forecast)}"
               f"  ({df_forecast['year'].min()} to {df_forecast['year'].max()})")
+        print(f"  LK leach rate : {lk_rate:.4f} kg/Mton  "
+              f"(prod winter={LK_PROD_WINTER} / summer={LK_PROD_SUMMER} Mton -- PLACEHOLDER)")
 
-        # Train
+        # Train (training data still has prod_lk=leach_lk=0)
         pipe, cv_scores, in_sample_r2 = train_model(df_train, param)
 
         # Seed the recurrence from last training row's storage
         seed_storage = df_train["storage_conc"].iloc[-1]
 
-        # Monte Carlo
-        print(f"  Running {N_MC_RUNS} MC runs ...")
+        # Monte Carlo -- LK leaching is also perturbed +-15%
+        print(f"  Running {N_MC_RUNS} MC runs (incl. LK) ...")
         mc = monte_carlo(pipe, df_forecast, seed_storage, rng)
         print(f"  P50 range: {mc['p50'].min():.4f} -- {mc['p50'].max():.4f}"
               f"  {BLOCKS[param]['unit']}")
@@ -529,16 +584,20 @@ def main():
             mc           = mc,
         )
         cv_summary.append({
-            "Parameter":         param,
-            "Unit":              BLOCKS[param]["unit"],
-            "Training rows":     len(df_train),
-            "Forecast rows":     len(df_forecast),
-            "CV R2 mean":        round(float(np.mean(cv_scores)), 4),
-            "CV R2 std":         round(float(np.std(cv_scores)), 4),
-            "In-sample R2":      round(in_sample_r2, 4),
-            "CV folds":          N_CV_SPLITS,
-            "MC runs":           N_MC_RUNS,
-            "MC perturbation %": int(MC_PERTURB * 100),
+            "Parameter":           param,
+            "Unit":                BLOCKS[param]["unit"],
+            "Training rows":       len(df_train),
+            "Forecast rows":       len(df_forecast),
+            "CV R2 mean":          round(float(np.mean(cv_scores)), 4),
+            "CV R2 std":           round(float(np.std(cv_scores)), 4),
+            "In-sample R2":        round(in_sample_r2, 4),
+            "CV folds":            N_CV_SPLITS,
+            "MC runs":             N_MC_RUNS,
+            "MC perturbation %":   int(MC_PERTURB * 100),
+            "LK leach rate (kg/Mton)": round(LK_LEACH_RATES[param], 4),
+            "LK prod winter (Mton)":   LK_PROD_WINTER,
+            "LK prod summer (Mton)":   LK_PROD_SUMMER,
+            "LK assumption":           "50/50 Leveaniemi+Kiruna (PLACEHOLDER)",
         })
 
     print("\n" + "=" * 62)
