@@ -17,9 +17,11 @@ Usage:   python water_quality_model.py
 Outputs: forecast_figure.png   forecast_results.xlsx
 """
 
-import sys, io
-# Force UTF-8 on Windows cp1252 terminals
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+import sys, io, platform
+
+# Force UTF-8 only on Windows (cp1252 terminals) -- not needed on Colab/Linux
+if platform.system() == "Windows":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 import warnings
 warnings.filterwarnings("ignore")
