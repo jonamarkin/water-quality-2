@@ -55,8 +55,8 @@ LEV_RATES_GT = {  # g/ton
     "SO4": 260000.0  / 1000,   # 260.0
     "Ca":  141777.8  / 1000,   # 141.8
     "NO3": 0.0,
-    "As":  12.511111 / 1000,   # 0.012511
-    "Cr":  0.163111  / 1000,   # 0.000163
+    "As":  0.0,                # lab rate 64x over vs monitoring; SEP83 is correct source
+    "Cr":  0.0,                # lab rate 1.5x over; SEP83 covers this
 }
 
 # Kiruna (AMD) leaching rates in g/ton
@@ -295,7 +295,7 @@ def run_mass_balance(df_inp, param, seed_conc, pit_conc, pit_mean, gb_mean):
 
     Unit: g / (Mm3 * 1e6 L/Mm3) = mg/L  [correct]
     """
-    ALPHA = 0.25
+    ALPHA  = 0.70   # responsiveness: how much each period's physics drives the output
     c_prev = seed_conc
     preds  = []
 
@@ -303,36 +303,38 @@ def run_mass_balance(df_inp, param, seed_conc, pit_conc, pit_mean, gb_mean):
         prod_ton = row["prod_ton"]
         frac_lev = row["frac_lev"]
         frac_kir = row["frac_kir"]
-        Q_pit    = row["Q_pit"]   # Mm3 half-year
-        Q_gb     = row["Q_gb"]    # Mm3 half-year
-        Q_disch  = row["Q_disch"] # Mm3 half-year
-        Q_leak   = row["Q_leak"]  # Mm3 half-year
+        Q_pit    = row["Q_pit"]    # Mm3 half-year — Leveaniemi pit pump
+        Q_gb     = row["Q_gb"]     # Mm3 half-year — Gruvberget background
+        Q_dams   = row["Q_dams"]   # Mm3 half-year — process dam water (tailings)
+        Q_disch  = row["Q_disch"]  # Mm3 half-year — monitored discharge
+        Q_leak   = row["Q_leak"]   # Mm3 half-year — seepage
         yr       = int(row["period"])
 
-        # 1. Leaching load from LK ore (g) — always included
-        rate_gt = frac_lev * LEV_RATES_GT[param] + frac_kir * KIR_RATES_GT[param]
+        # 1. Leach load -> effective concentration in process dam water
+        #    mass_g = rate(g/ton) * prod(ton)
+        #    c_dam(mg/L) = mass_g / (Q_dams * 1e6)
+        rate_gt      = frac_lev * LEV_RATES_GT[param] + frac_kir * KIR_RATES_GT[param]
         mass_leach_g = rate_gt * prod_ton
+        Q_dams_s     = Q_dams if Q_dams > 0 else 0.5
+        c_dam_mgl    = mass_leach_g / (Q_dams_s * 1e6)
 
-        # 2 & 3. Inflow loads: pit water (SEP83) + Gruvberget background
-        #   Unit handling: SEP83/SVA79 store ug/L for trace metals, mg/L for major ions.
-        #   mass_g = c_mgl * Q_Mm3 * 1e6   (derivation: c*1e-3 g/mg * Q*1e9 L/Mm3 = c*Q*1e6)
+        # 2. Pit water (SEP83) — time-varying, unit-corrected
         c_pit_raw = pit_conc[param].get(yr, pit_mean[param])
         c_pit_mgl = (c_pit_raw / 1000.0) if param in TRACE_UGL else c_pit_raw
-        mass_pit_g = c_pit_mgl * Q_pit * 1e6
 
-        c_gb_raw = gb_mean[param]
-        c_gb_mgl = (c_gb_raw / 1000.0) if param in TRACE_UGL else c_gb_raw
-        mass_gb_g = c_gb_mgl * Q_gb * 1e6
+        # 3. Gruvberget background
+        c_gb_mgl  = (gb_mean[param] / 1000.0) if param in TRACE_UGL else gb_mean[param]
 
-        # 4. Total mass and outflow concentration
-        Q_out = Q_disch + Q_leak
-        total_mass_g = mass_leach_g + mass_pit_g + mass_gb_g
-        c_new_mgl = total_mass_g / (Q_out * 1e6) if Q_out > 0 else c_prev
+        # 4. Flow-weighted mix at discharge point
+        #    c_out = (c_pit*Q_pit + c_dam*Q_dams + c_gb*Q_gb) / Q_out
+        Q_out     = Q_disch + Q_leak
+        Q_out_s   = Q_out if Q_out > 0 else 1.0
+        c_new_mgl = (c_pit_mgl * Q_pit + c_dam_mgl * Q_dams_s + c_gb_mgl * Q_gb) / Q_out_s
 
-        # 5. Convert back to ug/L for trace metals so c_prev stays in native units
+        # 5. Convert to reporting units (ug/L for trace metals)
         c_new = (c_new_mgl * 1000.0) if param in TRACE_UGL else c_new_mgl
 
-        # 6. P2 pond inertia smoothing
+        # 6. Temporal smoothing (pond residence time)
         c_mod = ALPHA * c_new + (1.0 - ALPHA) * c_prev
         c_mod = max(c_mod, 0.0)
         preds.append(c_mod)
