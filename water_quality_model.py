@@ -47,11 +47,20 @@ EXCEL_FILE = "Leveäniemi vattenbalans 301013-3-Update-2026Feb26.xlsx"
 SHEET_NAME = "Process water"
 
 # Block definitions: first_row/last_row are 0-based row indices in the sheet
+# All 12 contaminant blocks verified: 33 rows each, col9=modelled, col31=storage
 BLOCKS = {
-    "Cu":  dict(label="Cu",  unit="ug/L",  first_row=42,  last_row=74),
-    "NH4": dict(label="NH4", unit="mg/L",  first_row=81,  last_row=113),
-    "Cl":  dict(label="Cl",  unit="mg/L",  first_row=121, last_row=153),
-    "Ni":  dict(label="Ni",  unit="ug/L",  first_row=160, last_row=192),
+    "Cu":   dict(label="Cu",    unit="ug/L", first_row=42,  last_row=74),
+    "NH4":  dict(label="NH4",   unit="mg/L", first_row=81,  last_row=113),
+    "Cl":   dict(label="Cl",    unit="mg/L", first_row=121, last_row=153),
+    "Ni":   dict(label="Ni",    unit="ug/L", first_row=160, last_row=192),
+    "Zn":   dict(label="Zn",    unit="ug/L", first_row=199, last_row=231),
+    "Co":   dict(label="Co",    unit="ug/L", first_row=239, last_row=271),
+    "Mo":   dict(label="Mo",    unit="ug/L", first_row=278, last_row=310),
+    "SO4":  dict(label="SO4",   unit="mg/L", first_row=320, last_row=352),
+    "Ca":   dict(label="Ca",    unit="mg/L", first_row=360, last_row=392),
+    "NO3":  dict(label="NO3-N", unit="mg/L", first_row=396, last_row=428),
+    "As":   dict(label="As",    unit="ug/L", first_row=506, last_row=538),
+    "Cr":   dict(label="Cr",    unit="ug/L", first_row=543, last_row=575),
 }
 
 # Column indices (0-based), identical for all four blocks
@@ -87,27 +96,46 @@ EXCEL_OUT  = "forecast_results.xlsx"
 # ---------------------------------------------------------------------------
 # LK (Leveaniemi-Kiruna) ore combination
 # ---------------------------------------------------------------------------
-# The consultant never modelled LK. Leaching rates are derived from the
-# ore-tail leach calc sheet as a 50/50 average of Leveaniemi + Kiruna rates.
-# For NH4: Leveaniemi rate is 'na' (not measured), so only Kiruna contributes
-#          -> LK_NH4 = 0.5 * 0 + 0.5 * 3047.3 = 1523.65 kg/Mton
-# Production volumes use GK values as placeholder (update when known).
+# The consultant never modelled LK. Leaching rates derived from the
+# ore-tail leach calc sheet:
+#   GL (Gruvberget-Leveaniemi) rate = Leveaniemi component
+#   GK (Gruvberget-Kiruna) rate     = Kiruna component
+#   LK rate = 50% GL + 50% GK  (update LK_FRAC_* below when confirmed)
+LK_FRAC_LEV = 0.50   # fraction of Leveaniemi ore in LK mix
+LK_FRAC_KIR = 0.50   # fraction of Kiruna ore in LK mix
+
+_GL = {   # Leveaniemi leaching rates (kg/Mton) from ore-tail leach calc
+    "Cu":  1.360, "NH4": 598.0,   "Cl":  154444.0, "Ni":   0.631,
+    "Zn":  5.310, "Co":  0.107,   "Mo":  23.0,     "SO4":  260000.0,
+    "Ca":  141778.0, "NO3": 3393.0, "As": 13.0,   "Cr":   0.244,
+}
+_GK = {   # Kiruna leaching rates (kg/Mton) from ore-tail leach calc
+    "Cu":  11.668, "NH4": 3047.3,  "Cl":  285406.0, "Ni":  1.174,
+    "Zn":  150.0,  "Co":  0.283,   "Mo":  133.6,    "SO4": 1653906.0,
+    "Ca":  581426.0, "NO3": 17278.0, "As": 12.5,   "Cr":  0.163,
+}
 LK_LEACH_RATES = {
-    "Cu":  (1.358 + 11.668) / 2,          # 6.513  kg/Mton
-    "NH4": (0.0   + 3047.3) / 2,          # 1523.65 kg/Mton (Lev = n/a -> 0)
-    "Cl":  (154444 + 285406) / 2,         # 219925  kg/Mton
-    "Ni":  (0.631 + 1.174)  / 2,          # 0.9025 kg/Mton
+    p: LK_FRAC_LEV * _GL[p] + LK_FRAC_KIR * _GK[p]
+    for p in _GL
 }
 # Placeholder production volumes (Mton) -- same as GK split until confirmed
-LK_PROD_WINTER = 1.6667   # x.0 rows (5-month winter, no processing)
-LK_PROD_SUMMER = 2.5667   # x.5 rows (7-month summer, processing season)
+LK_PROD_WINTER = 1.6667   # x.0 rows (5-month winter)
+LK_PROD_SUMMER = 2.5667   # x.5 rows (7-month summer)
 
-# Colour palette (vibrant, distinct hues)
+# Colour palette — 12 distinct hues for 12 parameters
 COLOURS = {
-    "Cu":  "#00c8e8",
-    "NH4": "#f77f00",
-    "Cl":  "#7bc67e",
-    "Ni":  "#c77dff",
+    "Cu":  "#00c8e8",   # cyan
+    "NH4": "#f77f00",   # orange
+    "Cl":  "#7bc67e",   # green
+    "Ni":  "#c77dff",   # purple
+    "Zn":  "#ff6b6b",   # coral red
+    "Co":  "#ffd166",   # yellow
+    "Mo":  "#06d6a0",   # teal
+    "SO4": "#ef476f",   # pink
+    "Ca":  "#118ab2",   # deep blue
+    "NO3": "#ff9f1c",   # amber
+    "As":  "#a8dadc",   # ice blue
+    "Cr":  "#e9c46a",   # sand
 }
 
 # Feature columns -- includes LK features (zero during training)
@@ -347,21 +375,22 @@ def plot_results(results: dict, output_path: str):
     })
 
     params = list(results.keys())
-    fig    = plt.figure(figsize=(16, 11))
+    n_params = len(params)
+    n_cols   = 4
+    n_rows   = (n_params + n_cols - 1) // n_cols   # ceiling division
+
+    fig = plt.figure(figsize=(22, n_rows * 5.5))
     fig.suptitle(
         "Leveaniemi Mine - Process Water Quality Forecast 2026-2030\n"
         "Random Forest with Monte Carlo Uncertainty (P10 / P90, n=300, +/-15%)",
-        fontsize=15, fontweight="bold", y=0.98, color="#f0f0f0",
+        fontsize=15, fontweight="bold", y=0.99, color="#f0f0f0",
     )
-
-    gs = GridSpec(2, 2, figure=fig,
-                  hspace=0.42, wspace=0.32,
-                  left=0.07, right=0.97, top=0.91, bottom=0.09)
+    gs = GridSpec(n_rows, n_cols, figure=fig,
+                  hspace=0.50, wspace=0.32,
+                  left=0.05, right=0.98, top=0.94, bottom=0.06)
     pos_map = {
-        "Cu":  gs[0, 0],
-        "NH4": gs[0, 1],
-        "Cl":  gs[1, 0],
-        "Ni":  gs[1, 1],
+        p: gs[i // n_cols, i % n_cols]
+        for i, p in enumerate(params)
     }
 
     for param in params:
